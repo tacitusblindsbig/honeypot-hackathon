@@ -43,12 +43,16 @@ def honey_pot(
 ) -> HoneyPotResponse:
     validate_api_key(x_api_key)
 
+    body = payload
+    print(f"INCOMING REQUEST: {body.model_dump_json()}")
+    history_count = len(body.conversationHistory or [])
+
     response = HoneyPotResponse(
         status="success",
         scamDetected=True,
         engagementMetrics=EngagementMetrics(
             engagementDurationSeconds=0,
-            totalMessagesExchanged=len(payload.conversationHistory) + 1,
+            totalMessagesExchanged=history_count + 1,
         ),
         extractedIntelligence=ExtractedIntelligence(
             bankAccounts=[],
