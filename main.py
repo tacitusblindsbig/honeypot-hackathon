@@ -1,6 +1,6 @@
 from typing import Optional
 
-from fastapi import FastAPI, Header, HTTPException, status
+from fastapi import FastAPI, Header, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 
 from config import HONEYPOT_API_KEY
@@ -37,15 +37,16 @@ def health_check() -> dict:
 
 
 @app.post("/honey-pot", response_model=HoneyPotResponse)
-def honey_pot(
-    payload: HoneyPotRequest,
+async def honey_pot(
+    request: Request,
     x_api_key: Optional[str] = Header(default=None, alias="x-api-key"),
 ) -> HoneyPotResponse:
     validate_api_key(x_api_key)
 
-    body = payload
-    print(f"INCOMING REQUEST: {body.model_dump_json()}")
-    history_count = len(body.conversationHistory or [])
+    body = await request.json()
+    print(f"DEBUG_PAYLOAD: {body}")
+    history = body.get("conversationHistory")
+    history_count = len(history) if isinstance(history, list) else 0
 
     response = HoneyPotResponse(
         status="success",
