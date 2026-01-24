@@ -1,18 +1,13 @@
-from typing import Optional
+import os
 
-from fastapi import FastAPI, Header, HTTPException, Request, status
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 
-from config import HONEYPOT_API_KEY
-from schemas import (
-    HoneyPotRequest,
-    HoneyPotResponse,
-    EngagementMetrics,
-    ExtractedIntelligence,
-)
+from brain import HoneypotBrain
 
 
 app = FastAPI()
+brain = HoneypotBrain()
 
 app.add_middleware(
     CORSMiddleware,
@@ -23,47 +18,22 @@ app.add_middleware(
 )
 
 
-def validate_api_key(x_api_key: Optional[str]) -> None:
-    if not x_api_key or x_api_key != HONEYPOT_API_KEY:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Unauthorized",
-        )
-
-
 @app.get("/")
 def health_check() -> dict:
     return {"status": "active"}
 
 
-@app.post("/honey-pot", response_model=HoneyPotResponse)
-async def honey_pot(
-    request: Request,
-    x_api_key: Optional[str] = Header(default=None, alias="x-api-key"),
-) -> HoneyPotResponse:
-    validate_api_key(x_api_key)
+@app.post("/honey-pot")
+async def handle_honeypot(request: Request) -> dict:
+    try:
+        body = await request.json()
+        print(f"INCOMING: {body}")
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
 
-    body = await request.json()
-    print(f"DEBUG_PAYLOAD: {body}")
-    history = body.get("conversationHistory")
-    history_count = len(history) if isinstance(history, list) else 0
+    api_key = request.headers.get("x-api-key")
+    if api_key != os.getenv("HONEYPOT_API_KEY", "12345"):
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
-    response = HoneyPotResponse(
-        status="success",
-        scamDetected=True,
-        engagementMetrics=EngagementMetrics(
-            engagementDurationSeconds=0,
-            totalMessagesExchanged=history_count + 1,
-        ),
-        extractedIntelligence=ExtractedIntelligence(
-            bankAccounts=[],
-            upiIds=[],
-            phishingLinks=[],
-            phoneNumbers=[],
-            suspiciousKeywords=[],
-        ),
-        agentNotes="Dummy Success",
-        reply="Hello, I am confused. What do you mean?",
-    )
-
+    response = await brain.process_incoming_message(body)
     return response
