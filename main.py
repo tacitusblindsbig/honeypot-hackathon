@@ -1,6 +1,6 @@
 import os
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 
 from brain import HoneypotBrain
@@ -24,7 +24,7 @@ def health_check() -> dict:
 
 
 @app.post("/honey-pot")
-async def handle_honeypot(request: Request):
+async def handle_honeypot(request: Request, background_tasks: BackgroundTasks):
     # 1. Get Raw JSON (Bypass strict validation for safety, parse manually)
     try:
         body = await request.json()
@@ -38,7 +38,7 @@ async def handle_honeypot(request: Request):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     # 3. Let the Brain process it
-    response = await brain.process_incoming_message(body)
+    response = await brain.process_incoming_message(body, background_tasks)
     
     # 4. Return as Dict (The Fix: Convert Pydantic object to Dictionary)
     return response.model_dump()
