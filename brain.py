@@ -12,7 +12,7 @@ class HoneypotBrain:
             print("CRITICAL WARNING: GEMINI_API_KEY is missing.")
 
     def _send_callback(self, payload: dict):
-        [cite_start]"""Sends the MANDATORY final result to the evaluation endpoint[cite: 127, 131]."""
+        """Sends the mandatory final result to the evaluation endpoint."""
         try:
             callback_data = {
                 "sessionId": payload.get("sessionId", "unknown_session"),
