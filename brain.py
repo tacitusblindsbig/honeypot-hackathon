@@ -21,11 +21,43 @@ class HoneypotBrain:
                 "agentNotes": payload.get("agentNotes", "Automated report")
             }
             url = "https://hackathon.guvi.in/api/updateHoneyPotFinalResult"
-            # Using a short timeout so we don't hang if their server is slow
             requests.post(url, json=callback_data, timeout=5)
             print(f"CALLBACK SENT: {callback_data['sessionId']}")
         except Exception as e:
             print(f"CALLBACK FAILED: {e}")
+
+    def _call_gemini_with_fallback(self, payload: dict) -> dict:
+        """
+        Tries multiple model names until one works.
+        This fixes the 404 error by finding the correct model name automatically.
+        """
+        # List of models to try in order of preference
+        models = [
+            "gemini-1.5-flash",
+            "gemini-1.5-flash-001",
+            "gemini-1.5-flash-latest",
+            "gemini-pro"
+        ]
+
+        for model_name in models:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={self.api_key}"
+            try:
+                response = requests.post(url, json=payload, timeout=10)
+                
+                # If success, return the data immediately
+                if response.status_code == 200:
+                    print(f"SUCCESS with model: {model_name}")
+                    return response.json()
+                
+                # If 404 or other error, print and loop to next model
+                print(f"Model {model_name} failed: {response.status_code}")
+                
+            except Exception as e:
+                print(f"Connection error with {model_name}: {e}")
+                continue
+        
+        # If all failed, raise error
+        raise Exception("All Gemini models failed.")
 
     async def process_incoming_message(self, request_payload: dict, background_tasks: BackgroundTasks) -> HoneypotResponse:
         try:
@@ -42,9 +74,7 @@ class HoneypotBrain:
                 formatted_history += f"{sender.upper()}: {text}\n"
             formatted_history += f"SCAMMER (CURRENT): {current_msg}\n"
 
-            # 3. Construct the Raw JSON Payload for Gemini REST API
-            gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={self.api_key}"
-            
+            # 3. Construct Payload
             prompt_text = f"""
             ### SYSTEM INSTRUCTIONS
             You are "Auntie Janice", a 68-year-old retired librarian. 
@@ -79,12 +109,10 @@ class HoneypotBrain:
                 }
             }
 
-            # 4. Call Google API Directly (No SDK)
-            response = requests.post(gemini_url, json=payload, timeout=10)
-            response.raise_for_status() # Raise error if API fails
+            # 4. Call API with Fallback Logic (THE FIX)
+            response_json = self._call_gemini_with_fallback(payload)
             
             # 5. Parse Response
-            response_json = response.json()
             raw_text = response_json["candidates"][0]["content"]["parts"][0]["text"]
             data = json.loads(raw_text)
             
