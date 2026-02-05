@@ -7,23 +7,24 @@ from schemas import HoneypotResponse, EngagementMetrics, ExtractedIntelligence
 
 class HoneypotBrain:
     def __init__(self):
-        self.api_key = os.getenv("GEMINI_API_KEY")
-        if not self.api_key:
-            print("CRITICAL WARNING: GEMINI_API_KEY is missing.")
+        self.api_key = os.getenv("LLM_API_KEY")
+        self.base_url = os.getenv("LLM_BASE_URL")
+        self.model = os.getenv("LLM_MODEL")
+        
+        if not self.api_key or not self.base_url:
+            print("CRITICAL: Missing LLM credentials (LLM_API_KEY or LLM_BASE_URL).")
 
     def _send_callback(self, payload: dict):
-        """Sends the MANDATORY final result to the evaluation endpoint."""
+        """Sends the MANDATORY final result to the GUVI evaluation endpoint."""
         try:
             callback_data = {
-                "sessionId": payload.get("sessionId", "unknown_session"),
+                "sessionId": payload.get("sessionId", "unknown"),
                 "scamDetected": payload.get("scamDetected", True),
                 "totalMessagesExchanged": payload.get("engagementMetrics", {}).get("totalMessagesExchanged", 0),
                 "extractedIntelligence": payload.get("extractedIntelligence", {}),
                 "agentNotes": payload.get("agentNotes", "Automated report")
             }
-            # Source 131 in documentation
-            url = "https://hackathon.guvi.in/api/updateHoneyPotFinalResult"
-            requests.post(url, json=callback_data, timeout=2) 
+            requests.post("https://hackathon.guvi.in/api/updateHoneyPotFinalResult", json=callback_data, timeout=2)
             print(f"CALLBACK SENT: {callback_data['sessionId']}")
         except Exception as e:
             print(f"CALLBACK FAILED: {e}")
@@ -37,7 +38,7 @@ class HoneypotBrain:
         ])
 
     def _fallback_logic(self, incoming_text: str, history: list) -> dict:
-        """Smart Fallback Agent to break loops."""
+        """Smart Fallback Agent to break loops and ensure consistent responses."""
         text = incoming_text.lower()
         last_bot_reply = ""
         for turn in reversed(history):
@@ -63,19 +64,29 @@ class HoneypotBrain:
             "extractedIntelligence": {}
         }
 
-    def _call_gemini_2_flash(self, payload: dict) -> dict:
-        # THE FIX: Use the model we confirmed exists
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={self.api_key}"
+    def _call_llm(self, messages: list) -> dict:
+        """Calls the OpenAI-compatible LLM endpoint."""
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
+        # Ensure URL ends with /chat/completions
+        endpoint = f"{self.base_url.rstrip('/')}/chat/completions"
+        
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": 1.0,
+            "response_format": {"type": "json_object"}
+        }
+
         try:
-            response = requests.post(url, json=payload, timeout=8)
+            response = requests.post(endpoint, headers=headers, json=payload, timeout=10)
             if response.status_code == 200:
-                response_json = response.json()
-                if "candidates" in response_json and response_json["candidates"]:
-                    raw_text = response_json["candidates"][0]["content"]["parts"][0]["text"]
-                    clean_text = raw_text.replace("```json", "").replace("```", "").strip()
-                    return json.loads(clean_text)
-            print(f"Gemini 2.0 Failed: {response.status_code} - {response.text}")
-            raise Exception(f"Gemini API Error: {response.status_code}")
+                content = response.json()['choices'][0]['message']['content']
+                return json.loads(content)
+            print(f"LLM Error: {response.status_code} - {response.text}")
+            raise Exception(f"Provider Error: {response.status_code}")
         except Exception as e:
             raise e
 
@@ -88,36 +99,27 @@ class HoneypotBrain:
             data = {}
             try:
                 formatted_history = "\n".join([f"{t.get('sender', '').upper()}: {t.get('text', '')}" for t in history])
-                formatted_history += f"\nSCAMMER (CURRENT): {current_msg}"
                 
-                prompt_text = f"""
-                You are Auntie Janice (68, retired). GOAL: WASTE TIME. Feign confusion.
-                HISTORY: {formatted_history}
-                INSTRUCTIONS:
-                1. Do NOT repeat the exact same phrase twice in a row.
-                2. If the history shows you just asked a question, wait for their answer.
-                OUTPUT JSON EXACTLY:
-                {{
-                    "scamDetected": true, 
-                    "reply": "your text response", 
-                    "agentNotes": "analysis", 
-                    "extractedIntelligence": {{
-                        "bankAccounts": [], "upiIds": [], "phishingLinks": [], "phoneNumbers": [], "suspiciousKeywords": []
-                    }}
-                }}
-                """
+                system_prompt = """You are Auntie Janice (68, retired). GOAL: WASTE TIME. Feign confusion.
+INSTRUCTIONS:
+1. Do NOT repeat the exact same phrase twice in a row.
+2. If the history shows you just asked a question, wait for their answer.
+
+OUTPUT JSON EXACTLY:
+{"scamDetected": true, "reply": "your text response", "agentNotes": "analysis", "extractedIntelligence": {"bankAccounts": [], "upiIds": [], "phishingLinks": [], "phoneNumbers": [], "suspiciousKeywords": []}}"""
                 
-                payload = {
-                    "contents": [{"parts": [{"text": prompt_text}]}],
-                    "generationConfig": { "response_mime_type": "application/json", "temperature": 1.0 }
-                }
+                messages = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": f"HISTORY:\n{formatted_history}\n\nCURRENT SCAMMER MSG: {current_msg}"}
+                ]
                 
-                data = self._call_gemini_2_flash(payload)
+                data = self._call_llm(messages)
                 
             except Exception as e:
                 print(f"AI FAILED ({e}). SWAPPING TO FALLBACK.")
                 data = self._fallback_logic(current_msg, history)
 
+            # Construct Intelligence and Metrics
             intelligence = ExtractedIntelligence(
                 bankAccounts=data.get("extractedIntelligence", {}).get("bankAccounts", []),
                 upiIds=data.get("extractedIntelligence", {}).get("upiIds", []),
@@ -131,6 +133,7 @@ class HoneypotBrain:
                 totalMessagesExchanged=len(history) + 1
             )
             
+            # Prepare callback payload
             full_response_dict = {
                 "sessionId": session_id,
                 "scamDetected": True,
@@ -150,6 +153,7 @@ class HoneypotBrain:
             )
 
         except Exception as e:
+            print(f"CRITICAL ERROR: {e}")
             return HoneypotResponse(
                 status="error",
                 scamDetected=True,
