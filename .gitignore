@@ -1,0 +1,20 @@
+```text
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment Variables (CRITICAL)
+.env
+.env.local
+
+# Virtual Environments
+venv/
+env/
+.venv/
+
+# IDE settings
+.vscode/
+.idea/
+*.swp
+.DS_Store
